@@ -79,6 +79,32 @@ function jstr(body) { // body 可能是字符串或 Uint8Array
 }
 function jparse(s) { try { return JSON.parse(s); } catch (e) { return null; } }
 
+// 容错解析账号 JSON: 严格 JSON 失败时, 清洗 iOS 智能引号/全角符号再重试
+function parseAccounts(raw) {
+  if (raw === undefined || raw === null) return [];
+  var s0 = String(raw).trim();
+  if (!s0 || s0 === "[]") return [];
+  var a = jparse(s0);
+  if (Array.isArray(a)) return a;
+  // 若 $argument 分支误把数组再包成字符串, 先解一层
+  if (typeof a === "string") { a = jparse(a); if (Array.isArray(a)) return a; }
+  var clean = s0
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\uFF1A/g, ':')
+    .replace(/\uFF0C/g, ',')
+    .replace(/\uFF5B/g, '[').replace(/\uFF5D/g, ']')
+    .replace(/\uFF5C/g, '\\')
+    .replace(/\u3000/g, ' ')
+    .replace(/\s+/g, ' ');
+  var b = jparse(clean);
+  if (Array.isArray(b)) { console.log("[diag] accounts 经引号清洗后解析成功"); return b; }
+  var m = clean.match(/\[[\s\S]*\]/);
+  if (m) { var c = jparse(m[0]); if (Array.isArray(c)) { console.log("[diag] accounts 经截取方括号后解析成功"); return c; } }
+  console.log("[diag] accounts 无法解析, 原始=" + s0.slice(0, 60));
+  return [];
+}
+
 // ---------- 设备身份 (模拟不同环境: 每账号稳定指纹, 每 run 新 sampleId) ----------
 function getDevice(acct) {
   var key = "hzj_dev_" + (acct.n || "anon");
@@ -440,15 +466,15 @@ async function runAccount(acct) {
 (async function main() {
   if (!CFG.enabled) { console.log("disabled"); $done(); return; }
   var parseErr = "";
-  var accounts = jparse(CFG.accounts);
-  if (accounts === null && CFG.accounts && CFG.accounts !== "[]") parseErr = "JSON解析失败: " + CFG.accounts.slice(0, 120);
-  if (typeof accounts === "string") { var a2 = jparse(accounts); if (a2 === null) parseErr = "双层JSON解析失败: " + accounts.slice(0, 120); accounts = a2; }
-  if (!Array.isArray(accounts)) accounts = [];
+  var accounts = parseAccounts(CFG.accounts);
+  if (accounts.length === 0 && CFG.accounts && String(CFG.accounts).trim() !== "[]" && String(CFG.accounts).trim() !== "") {
+    parseErr = "账号JSON无法解析(可能是智能引号/全角字符): " + String(CFG.accounts).slice(0, 120);
+  }
   var argObj = (typeof $argument === "object" && $argument) ? $argument : null;
-  var argDebug = argObj ? ("$argument.accounts 类型=" + (typeof argObj.accounts) + " 长度=" + String(argObj.accounts || "").length + " 前40字=" + String(argObj.accounts || "(null)").slice(0, 40)) : ("$argument 非对象: " + typeof $argument + " = " + String($argument || "").slice(0, 80));
-  console.log("[diag] " + argDebug + " | parseErr: " + parseErr);
+  var argDebug = argObj ? ("$argument.accounts 类型=" + (typeof argObj.accounts) + " 长度=" + String(argObj.accounts || "").length) : ("$argument 非对象: " + typeof $argument);
+  console.log("[diag] " + argDebug + " 解析出账号数=" + accounts.length + " | " + parseErr);
   if (!accounts.length) {
-    $notification.post("互助集·车队", "未配置账号", "诊断: " + argDebug + (parseErr ? "\n" + parseErr : "\n参数快照可能未重载: 保存参数后等 Loon 完成重载再运行(或设置里手动重载配置)"));
+    $notification.post("互助集·车队", "未配置账号", "诊断: " + argDebug + " | 解析出0个账号" + (parseErr ? "\n" + parseErr : "\n请在参数里填 [{\"n\":\"名\",\"c\":\"\",\"node\":\"出口\"}]，c 可留空"));
     $done({ error: "no accounts", diag: argDebug + " " + parseErr });
     return;
   }
