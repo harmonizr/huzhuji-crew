@@ -3,18 +3,20 @@
 #!author = harmonizr
 #!homepage = https://raw.githubusercontent.com/harmonizr/huzhuji-crew/main/README.md
 #!type = normal
-#!loon_version = 3.5.1(978)
+#!loon_version = 3.5.1(983)
 
 [Argument]
-enabled = switch,true,type=boolean,tag=启用
+enabled = switch,true,tag=启用
 accounts = input,"",type=string,tag=账号列表(JSON),desc=[{"n":"名","c":"aid值","node":"出口节点/策略组(可空)","code":"该账号专属口令(可空)"}]; c留空=自动开新匿名号
 crew_code = input,"",type=string,tag=车队口令(共享),desc=淘宝车队"拉人助力 向前冲"完整口令; 每日0点失效需更新; 账号code优先
 earn = input,"pdd,jdj,tb",type=string,tag=攒分频道,desc=低于Lv.2(200分)时用来攒分的频道, 逗号分隔
 help_count = input,6,type=number,tag=车队助力次数,desc=每账号每次执行助力他人上限(站点日限6)
 earn_count = input,10,type=number,tag=攒分助力次数,desc=每账号每次执行攒分助力上限
 pace_ms = input,12000,type=number,tag=请求间隔(毫秒),desc=防429爆发限制, 建议>=10000
-dry_run = switch,false,type=boolean,tag=试运行(不提交),desc=开启后只做查询与计划, 不发任何助力/发布
+dry_run = switch,false,tag=试运行(不提交),desc=开启后只做查询与计划, 不发任何助力/发布
+cron_time = input,"0 8,14,20 * * *",type=string,tag=执行时间(cron),desc=5段: 分 时 日 月 周; 多个时点用逗号, 改完本插件任务列表自动更新
 
 [Script]
-cron "0 8,14,20 * * *" script-path="https://raw.githubusercontent.com/harmonizr/huzhuji-crew/main/hzj_crew.js", argument={enabled,accounts,crew_code,earn,help_count,earn_count,pace_ms,dry_run}, enabled=${enabled}, tag="互助集车队·自动", timeout=1800
-generic script-path="https://raw.githubusercontent.com/harmonizr/huzhuji-crew/main/hzj_crew.js", argument={enabled,accounts,crew_code,earn,help_count,earn_count,pace_ms,dry_run}, tag="互助集车队·手动", enabled=${enabled}, img-url=bolt, timeout=1800
+cron ${cron_time} then script("https://raw.githubusercontent.com/harmonizr/huzhuji-crew/main/hzj_crew.js", {${enabled}, ${accounts}, ${crew_code}, ${earn}, ${help_count}, ${earn_count}, ${pace_ms}, ${dry_run}}) with enable=${enabled}, tag="互助集车队·自动", timeout=1800
+
+generic then script("https://raw.githubusercontent.com/harmonizr/huzhuji-crew/main/hzj_crew.js", {${enabled}, ${accounts}, ${crew_code}, ${earn}, ${help_count}, ${earn_count}, ${pace_ms}, ${dry_run}}) with tag="互助集车队·手动", img_url="bolt", timeout=1800

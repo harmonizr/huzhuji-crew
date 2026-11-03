@@ -1,15 +1,19 @@
 // Node harness: runs hzj_crew.js with shims for Loon globals ($httpClient etc.)
 const https = require('https'), zlib = require('zlib'), fs = require('fs');
 
-const store = new Map();
-const logLines = [];
-let doneValue = null;
+// File-backed persistent store (simulates separate Loon runs)
+const storeFile = process.argv[4] || '/tmp/hzj_store.json';
+let store;
+try { store = JSON.parse(fs.readFileSync(storeFile, 'utf8')); } catch (e) { store = {}; }
+function saveStore() { fs.writeFileSync(storeFile, JSON.stringify(store, null, 0)); }
 
 global.$persistentStore = {
-  read: (k) => store.get(k) ?? '',
-  write: (v, k) => { store.set(k || '__default__', v); return true; },
-  remove: () => store.clear(),
+  read: (k) => (store[k] !== undefined ? store[k] : ''),
+  write: (v, k) => { const key = k || '__default__'; if (v === undefined) delete store[key]; else store[key] = v; saveStore(); return true; },
+  remove: () => { store = {}; saveStore(); },
 };
+const logLines = [];
+let doneValue = null;
 global.$notification = { post: (t, s, c) => { logLines.push('NOTIFY: ' + t + ' | ' + s + ' | ' + (c || '').toString().slice(0, 600)); } };
 global.$done = (v) => { doneValue = v; };
 global.$argument = null; // set per run
