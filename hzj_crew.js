@@ -225,11 +225,27 @@ function makeSession(acct) {
     }
   };
   sess.dev = getDevice(acct);
+  sess.acct = acct;
+  sess.aidKey = "hzj_aid_" + (acct.n || "anon");
   sess.init = async function () {
     sess.cookie = normAid(acct.c || "");
+    if (!sess.cookie) { // 自动开号: 复用持久化的 aid
+      var savedAid = $persistentStore.read(sess.aidKey);
+      if (savedAid) { sess.cookie = normAid(savedAid); console.log("[" + (acct.n || "anon") + "] 复用已存 aid"); }
+    }
     // 先取身份 (无 aid 时服务端自动签发新身份 → 记录 Set-Cookie)
     var r = await http("GET", BASE + "/api/identity/context", sess.headers(), null, acct.node);
     captureSetCookie(sess, r);
+    if (r.status === 401 || (jparse(r.body) || {}).code === "SESSION_INVALID") {
+      // 存的 aid 失效(过期/被清) → 清掉, 无 cookie 重试(服务端会签发新身份)
+      if (!acct.c) {
+        console.log("[" + (acct.n || "anon") + "] 已存 aid 失效, 重开新号");
+        $persistentStore.write(undefined, sess.aidKey);
+      }
+      sess.cookie = "";
+      r = await http("GET", BASE + "/api/identity/context", sess.headers(), null, acct.node);
+      captureSetCookie(sess, r);
+    }
     var j = jparse(r.body);
     if (j && j.data) {
       sess.csrf = j.data.csrfToken || "";
@@ -278,7 +294,10 @@ function captureSetCookie(sess, r) {
   if (Array.isArray(sc)) sc = sc.join("; ");
   if (!sc) return;
   var m = String(sc).match(/aid=([^;]+)/);
-  if (m && normAid(m[1])) sess.cookie = m[1]; // 记下(可能是自动创建的新身份)
+  if (m && normAid(m[1])) {
+    sess.cookie = m[1]; // 记下(可能是自动创建的新身份)
+    if (!sess.acct.c) $persistentStore.write(m[1], sess.aidKey); // 自动号 → 持久化, 下次运行复用
+  }
 }
 
 
