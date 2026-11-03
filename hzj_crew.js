@@ -79,31 +79,52 @@ function jstr(body) { // body 可能是字符串或 Uint8Array
 }
 function jparse(s) { try { return JSON.parse(s); } catch (e) { return null; } }
 
-// 容错解析账号 JSON: 严格 JSON 失败时, 清洗 iOS 智能引号/全角符号再重试
+// 容错解析账号 JSON: 严格 JSON → 全量引号/全角清洗 → 正则抽取(任何引号都行)
+var ACCOUNT_QCHARS = "'\"\u201C\u201D\u2018\u2019\uFF02";
 function parseAccounts(raw) {
   if (raw === undefined || raw === null) return [];
   var s0 = String(raw).trim();
   if (!s0 || s0 === "[]") return [];
   var a = jparse(s0);
   if (Array.isArray(a)) return a;
-  // 若 $argument 分支误把数组再包成字符串, 先解一层
   if (typeof a === "string") { a = jparse(a); if (Array.isArray(a)) return a; }
   var clean = s0
-    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
-    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F\uFF02\u00AB\u00BB\u2033\u2034\u2039\u203A\u02BB\u02BC\u02BA]/g, '"')
+    .replace(/[\u2018\u2019\uFF07]/g, "'")
     .replace(/\uFF1A/g, ':')
     .replace(/\uFF0C/g, ',')
     .replace(/\uFF5B/g, '[').replace(/\uFF5D/g, ']')
     .replace(/\uFF5C/g, '\\')
-    .replace(/\u3000/g, ' ')
+    .replace(/[\u200B\u200C\u200D\uFEFF\u3000\u00A0]/g, ' ')
     .replace(/\s+/g, ' ');
   var b = jparse(clean);
   if (Array.isArray(b)) { console.log("[diag] accounts 经引号清洗后解析成功"); return b; }
-  var m = clean.match(/\[[\s\S]*\]/);
-  if (m) { var c = jparse(m[0]); if (Array.isArray(c)) { console.log("[diag] accounts 经截取方括号后解析成功"); return c; } }
+  var blocks = clean.match(/\{[^{}]*\}/g);
+  if (blocks) {
+    var out = [], Q = "[" + ACCOUNT_QCHARS + "]";
+    var pairRe = new RegExp(Q + "([A-Za-z_][\\w-]*)" + Q + "\\s*:\\s*" + Q + "([^" + ACCOUNT_QCHARS + "]*)" + Q, "g");
+    for (var bi = 0; bi < blocks.length; bi++) {
+      var obj = {}, pm;
+      pairRe.lastIndex = 0;
+      while ((pm = pairRe.exec(blocks[bi])) !== null) obj[pm[1]] = pm[2];
+      if (Object.keys(obj).length) out.push(obj);
+    }
+    if (out.length) { console.log("[diag] accounts 经正则抽取解析成功 " + out.length + " 个"); return out; }
+  }
   console.log("[diag] accounts 无法解析, 原始=" + s0.slice(0, 60));
   return [];
 }
+function accountsDiag(raw) {
+  var raws = String(raw || "");
+  var cps = [];
+  for (var i = 0; i < raws.length; i++) {
+    var cp = raws.charCodeAt(i);
+    if (cp > 127 || cp < 33) cps.push("U+" + cp.toString(16).toUpperCase());
+  }
+  var uniq = cps.filter(function (v, i2) { return cps.indexOf(v) === i2; }).slice(0, 12).join(" ");
+  return raws.length + " 码点: " + (uniq || "(纯ASCII)");
+}
+
 
 // ---------- 设备身份 (模拟不同环境: 每账号稳定指纹, 每 run 新 sampleId) ----------
 function getDevice(acct) {
@@ -465,17 +486,13 @@ async function runAccount(acct) {
 // ---------- 主入口 ----------
 (async function main() {
   if (!CFG.enabled) { console.log("disabled"); $done(); return; }
-  var parseErr = "";
   var accounts = parseAccounts(CFG.accounts);
-  if (accounts.length === 0 && CFG.accounts && String(CFG.accounts).trim() !== "[]" && String(CFG.accounts).trim() !== "") {
-    parseErr = "账号JSON无法解析(可能是智能引号/全角字符): " + String(CFG.accounts).slice(0, 120);
-  }
   var argObj = (typeof $argument === "object" && $argument) ? $argument : null;
   var argDebug = argObj ? ("$argument.accounts 类型=" + (typeof argObj.accounts) + " 长度=" + String(argObj.accounts || "").length) : ("$argument 非对象: " + typeof $argument);
-  console.log("[diag] " + argDebug + " 解析出账号数=" + accounts.length + " | " + parseErr);
+  console.log("[diag] " + argDebug + " 解析出账号数=" + accounts.length);
   if (!accounts.length) {
-    $notification.post("互助集·车队", "未配置账号", "诊断: " + argDebug + " | 解析出0个账号" + (parseErr ? "\n" + parseErr : "\n请在参数里填 [{\"n\":\"名\",\"c\":\"\",\"node\":\"出口\"}]，c 可留空"));
-    $done({ error: "no accounts", diag: argDebug + " " + parseErr });
+    $notification.post("互助集·车队", "未配置账号", "诊断: " + argDebug + "\n实际收到: " + String(CFG.accounts || "(空)") + "\n" + accountsDiag(CFG.accounts) + "\n请确认参数已点✓保存且 JSON 完整");
+    $done({ error: "no accounts", diag: argDebug + " " + String(CFG.accounts) + " " + accountsDiag(CFG.accounts) });
     return;
   }
   var results = [];
