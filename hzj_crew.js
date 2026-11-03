@@ -439,12 +439,17 @@ async function runAccount(acct) {
 // ---------- 主入口 ----------
 (async function main() {
   if (!CFG.enabled) { console.log("disabled"); $done(); return; }
-  var accounts = jparse(CFG.accounts) || [];
-  if (typeof accounts === "string") accounts = jparse(accounts) || []; // 对象参数分支会多包一层 JSON 字符串
+  var parseErr = "";
+  var accounts = jparse(CFG.accounts);
+  if (accounts === null && CFG.accounts && CFG.accounts !== "[]") parseErr = "JSON解析失败: " + CFG.accounts.slice(0, 120);
+  if (typeof accounts === "string") { var a2 = jparse(accounts); if (a2 === null) parseErr = "双层JSON解析失败: " + accounts.slice(0, 120); accounts = a2; }
   if (!Array.isArray(accounts)) accounts = [];
+  var argObj = (typeof $argument === "object" && $argument) ? $argument : null;
+  var argDebug = argObj ? ("$argument.accounts 类型=" + (typeof argObj.accounts) + " 长度=" + String(argObj.accounts || "").length + " 前40字=" + String(argObj.accounts || "(null)").slice(0, 40)) : ("$argument 非对象: " + typeof $argument + " = " + String($argument || "").slice(0, 80));
+  console.log("[diag] " + argDebug + " | parseErr: " + parseErr);
   if (!accounts.length) {
-    $notification.post("互助集·车队", "未配置账号", "在插件参数 accounts 里填 JSON: [{\"n\":\"名\",\"c\":\"aid cookie值\"}]；c 留空=自动开新匿名号");
-    $done({ error: "no accounts" });
+    $notification.post("互助集·车队", "未配置账号", "诊断: " + argDebug + (parseErr ? "\n" + parseErr : "\n参数快照可能未重载: 保存参数后等 Loon 完成重载再运行(或设置里手动重载配置)"));
+    $done({ error: "no accounts", diag: argDebug + " " + parseErr });
     return;
   }
   var results = [];
