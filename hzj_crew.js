@@ -395,6 +395,7 @@ async function doHelp(sess, slug, count, log, ch) {
       } else {
         log.push("助力失败 " + it.maskedCode + ": " + r.status + " " + ((r.json && (r.json.message || r.json.code)) || r.raw.slice(0, 80)));
         if (r.status === 403 || r.status === 400) break; // 额度/权限问题, 不再尝试
+        if (r.status === 409) break; // 信誉限制(TAOBAO独占/REPUTATION_RESTRICTED): 当日再试也没用
       }
       await sleep(CFG.pace_ms + Math.floor(Math.random() * 4000));
     }
@@ -454,6 +455,11 @@ async function doPublish(sess, code, log, crewCh, crewSlug) {
   if (r.status === 409 && r.json && r.json.code === "TAOBAO_PUBLISHER_CLAIMED_TODAY") {
     log.push("发布: 今日该淘宝口令已被其他站点账号先发布(原账号独占, 服务端规则不可绕过)。今日无需再发; 明天换新口令后让本账号先手发布即可");
     return "CLAIMED";
+  }
+  // 信誉限制: 账号被站点风控暂停发布/助力至某时间, 可申诉 (409 REPUTATION_RESTRICTED)
+  if (r.status === 409 && r.json && r.json.code === "REPUTATION_RESTRICTED") {
+    log.push("发布受阻: 账号信誉限制, " + (r.json.message || "暂停发布/助力") + " → 站点风控(多账号同IP/短时间大量助力易触发), 可去站点申诉, 限制解除前本轮放弃");
+    return "RESTRICTED";
   }
   log.push("发布失败: " + r.status + " " + ((r.json && (r.json.message || r.json.code)) || r.raw.slice(0, 100)));
   return "FAIL";
