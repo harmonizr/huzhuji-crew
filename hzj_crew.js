@@ -450,6 +450,11 @@ async function doPublish(sess, code, log, crewCh, crewSlug) {
     log.push("发布成功" + (r.json && r.json.data && r.json.data.id ? " id=" + String(r.json.data.id).slice(0, 8) : ""));
     return "OK";
   }
+  // 服务端每日独占规则: 同一淘宝账号的口令每天只能由一个本站账号"认领"发布(最先发的那个), 其余账号当天 409
+  if (r.status === 409 && r.json && r.json.code === "TAOBAO_PUBLISHER_CLAIMED_TODAY") {
+    log.push("发布: 今日该淘宝口令已被其他站点账号先发布(原账号独占, 服务端规则不可绕过)。今日无需再发; 明天换新口令后让本账号先手发布即可");
+    return "CLAIMED";
+  }
   log.push("发布失败: " + r.status + " " + ((r.json && (r.json.message || r.json.code)) || r.raw.slice(0, 100)));
   return "FAIL";
 }
@@ -491,7 +496,7 @@ async function runAccount(acct) {
           if (crewCh2) { crewSlug = crewCh2.slug; crewCh = crewCh2; }
         }
       } else {
-        log.push("今日车队助力额度已用完");
+        log.push("今日车队助力额度已用完(" + (crewCh.quota ? (crewCh.quota.used || 0) + "/" + (crewCh.quota.limit || 6) : "6/6") + ", 之前已助满) → 仅做发布");
       }
       var code = acct.code || CFG.crew_code || "";
       await doPublish(sess, code, log, crewCh, crewSlug);
