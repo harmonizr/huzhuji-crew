@@ -3,7 +3,7 @@
 // Loon 3.5+ Script  (经典 $httpClient / $persistentStore API)
 // 功能: 每个账号每天:
 //   Lv<2 : 在开放频道(pdd/jdj/tb)助力他人 攒积分(到 200=Lv.2 解锁车队频道)
-//   Lv>=2: 在 jdj-crew 助力他人(赚"被助力"名额) + 发布自己的车队口令
+//   Lv>=2: 在车队互助频道(jdj-teamhelp)助力他人(赚"被助力"余额) + 发布自己的车队口令
 // 多账号"不同环境": 每账号独立设备指纹/会话cookie, 可配不同代理节点(node)
 // ============================================================
 "use strict";
@@ -402,11 +402,33 @@ async function doHelp(sess, slug, count, log, ch) {
   return { done: helped, points: pts };
 }
 
-// 发布口令 (仅当有被助力名额或可免费发布)
-async function doPublish(sess, code, log, crewCh) {
+// 动态解析"车队互助"频道 (11-04 起 slug jdj-crew→jdj-teamhelp; 站点可能再改 → 名称/slug 双特征匹配)
+async function findCrewChannel(sess, fresh) {
+  if (!fresh && sess.channels && sess.channels.length) {
+    var hit0 = matchCrew(sess.channels);
+    if (hit0) return hit0;
+  }
+  var r = await sess.api("GET", "/api/channels", null);
+  if (!(r.status === 200 && r.json && r.json.data)) return null;
+  var list = r.json.data;
+  if (!fresh) sess.channels = list;
+  return matchCrew(list);
+}
+function matchCrew(list) {
+  var byName = null, bySlug = null;
+  for (var i = 0; i < list.length; i++) {
+    var c = list[i];
+    if (!byName && String(c.displayName || "").indexOf("车队互助") > -1) byName = c;
+    if (!bySlug && /teamhelp|crew/i.test(c.slug || "")) bySlug = c;
+  }
+  return byName || bySlug || null;
+}
+
+// 发布口令 (仅当有被助力余额或可免费发布; 每次助力他人+1次被助力余额, 上限6, 0点失效)
+async function doPublish(sess, code, log, crewCh, crewSlug) {
   if (!code || code.length < 2) { log.push("未配置口令 → 跳过发布"); return "NO_CODE"; }
   // 今日是否已发布 (防止重复)
-  var sub = await sess.api("GET", "/api/me/submissions?limit=10&channelSlug=jdj-crew", null);
+  var sub = await sess.api("GET", "/api/me/submissions?limit=10&channelSlug=" + encodeURIComponent(crewSlug || "jdj-teamhelp"), null);
   if (sub.status === 200 && sub.json && sub.json.data) {
     var t = todayStr();
     var dup = sub.json.data.some(function (s) {
@@ -415,14 +437,15 @@ async function doPublish(sess, code, log, crewCh) {
     });
     if (dup) { log.push("今日已发布过车队口令 → 跳过"); return "ALREADY"; }
   }
-  var recvRem = crewCh && crewCh.receiveQuota ? crewCh.receiveQuota.remaining : 0;
-  var freePub = crewCh && crewCh.receiveQuota ? crewCh.receiveQuota.freePublishAvailable : false;
-  if (recvRem <= 0 && !freePub) {
-    log.push("无被助力名额(需先助力他人, 或待助力列表<6条) → 跳过发布");
+  var rq = (crewCh && crewCh.receiveQuota) || {};
+  var slots = Math.max(0, rq.remaining || 0, rq.earnedRemaining || 0);
+  var freePub = !!rq.freePublishAvailable;
+  if (slots <= 0 && !freePub) {
+    log.push("无被助力名额(remaining=" + (rq.remaining || 0) + ", earnedRemaining=" + (rq.earnedRemaining || 0) + ", 免费发布=" + (rq.freePublishAvailable ? "是" : "否") + ") → 跳过发布");
     return "NO_QUOTA";
   }
-  if (CFG.dry_run) { log.push("[dry] 发布口令 " + code.slice(0, 40) + "… (" + recvRem + " 名额" + (freePub ? "+免费发布" : "") + ")"); return "DRY"; }
-  var r = await sess.api("POST", "/api/invites", { channelSlug: "jdj-crew", code: code });
+  if (CFG.dry_run) { log.push("[dry] 发布口令 " + code.slice(0, 40) + "… (" + slots + " 余额" + (freePub ? "+免费发布" : "") + ")"); return "DRY"; }
+  var r = await sess.api("POST", "/api/invites", { channelSlug: crewSlug || "jdj-teamhelp", code: code });
   if (r.status === 201 || r.status === 200) {
     log.push("发布成功" + (r.json && r.json.data && r.json.data.id ? " id=" + String(r.json.data.id).slice(0, 8) : ""));
     return "OK";
@@ -444,27 +467,35 @@ async function runAccount(acct) {
   }
   log.push(nick + " · 积分 " + pts + (identity.level ? " · " + identity.level.name : ""));
 
-  // 车队频道准入: 积分>=200 即 Lv.2 (站点 11-04 更新后 access 端点 404, 以 identity 积分为准, access 仅作参考)
-  var access = await sess.api("GET", "/api/invites/jdj-crew/access", null);
-  var accessOk = access.status === 200 && access.json && access.json.data && access.json.data.allowed === true;
-  var byPoints = pts >= 200;
-  var allowed = accessOk || byPoints;
-  if (!accessOk) console.log("[" + nick + "] crew access 端点: " + access.status + " " + ((access.json && (access.json.message || access.json.code)) || "") + (byPoints ? " → 按积分进车队模式" : ""));
-  if (!allowed && access.status === 403 && access.json && access.json.message) log.push("车队准入被拒: " + access.json.message);
+  // 车队频道准入: 服务端 403 CREW_ACCESS_DENIED "仅供Lv.2级以上或正式用户使用"
+  // 11-04 起 access 端点已下线, 频道 slug 改为 jdj-teamhelp → 以 identity 积分≥200(Lv.2) 为门禁
+  var allowed = pts >= 200;
 
   if (allowed) {
-    // ===== 车队模式: 助力 + 发布 =====
-    var crewCh = (await channelInfo(sess, "jdj-crew")) || {};
-    var helpRem = crewCh.quota ? crewCh.quota.remaining : CFG.help_count;
-    var wantHelp = Math.min(CFG.help_count, helpRem);
-    if (wantHelp > 0) {
-      var h = await doHelp(sess, "jdj-crew", wantHelp, log, crewCh);
-      log.push("车队助力 " + h.done + "/" + wantHelp + " 次" + (CFG.dry_run ? " (dry)" : ", 约+" + h.points + " 分"));
+    // ===== 车队模式: 助力 + 发布 (频道 slug 动态解析, 防站点再改名) =====
+    var crewCh = await findCrewChannel(sess);
+    if (!crewCh) {
+      log.push("车队互助频道未在开放列表 → 本次跳过车队助力/发布");
     } else {
-      log.push("今日车队助力额度已用完");
+      var crewSlug = crewCh.slug;
+      console.log("[" + nick + "] 车队频道: " + crewSlug + " (" + crewCh.displayName + ", 额度剩 " + (crewCh.quota ? crewCh.quota.remaining : "?") + ")");
+      var helpRem = crewCh.quota ? (crewCh.quota.remaining || 0) : CFG.help_count;
+      var wantHelp = Math.min(CFG.help_count, helpRem);
+      if (wantHelp > 0) {
+        var h = await doHelp(sess, crewSlug, wantHelp, log, crewCh);
+        log.push("车队助力 " + h.done + "/" + wantHelp + " 次" + (CFG.dry_run ? " (dry)" : ", 约+" + h.points + " 分"));
+        if (h.done > 0 && !CFG.dry_run) {
+          // 每次助力赚 1 次被助力余额 → 刷新频道信息, 发布判定用最新状态
+          sess.channels = null;
+          var crewCh2 = await findCrewChannel(sess, true);
+          if (crewCh2) { crewSlug = crewCh2.slug; crewCh = crewCh2; }
+        }
+      } else {
+        log.push("今日车队助力额度已用完");
+      }
+      var code = acct.code || CFG.crew_code || "";
+      await doPublish(sess, code, log, crewCh, crewSlug);
     }
-    var code = acct.code || CFG.crew_code || "";
-    await doPublish(sess, code, log, crewCh);
   } else {
     // ===== 攒分模式: 开放频道助力 → 冲 Lv.2 (200分) =====
     var left = CFG.earn_count;
