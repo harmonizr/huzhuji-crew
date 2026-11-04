@@ -444,9 +444,13 @@ async function runAccount(acct) {
   }
   log.push(nick + " · 积分 " + pts + (identity.level ? " · " + identity.level.name : ""));
 
-  // 车队频道准入?
+  // 车队频道准入: 积分>=200 即 Lv.2 (站点 11-04 更新后 access 端点 404, 以 identity 积分为准, access 仅作参考)
   var access = await sess.api("GET", "/api/invites/jdj-crew/access", null);
-  var allowed = access.status === 200 && access.json && access.json.data && access.json.data.allowed;
+  var accessOk = access.status === 200 && access.json && access.json.data && access.json.data.allowed === true;
+  var byPoints = pts >= 200;
+  var allowed = accessOk || byPoints;
+  if (!accessOk) console.log("[" + nick + "] crew access 端点: " + access.status + " " + ((access.json && (access.json.message || access.json.code)) || "") + (byPoints ? " → 按积分进车队模式" : ""));
+  if (!allowed && access.status === 403 && access.json && access.json.message) log.push("车队准入被拒: " + access.json.message);
 
   if (allowed) {
     // ===== 车队模式: 助力 + 发布 =====
